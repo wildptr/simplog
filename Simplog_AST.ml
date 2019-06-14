@@ -8,13 +8,18 @@ type radix = Dec | Bin | Oct | Hex
 
 type binop = Add | Sub | Eq | NotEq | LogAnd | LogXor | LogOr | And | Or
 
-type expr =
+type expr = {
+  e_kind : expr_kind;
+  e_loc : Lexing.position * Lexing.position;
+}
+
+and expr_kind =
   | IntExpr of int
   | LitExpr of int option * radix * Z.t
   | BoolExpr of bool
   | IdentExpr of string
   | LetExpr of (string * expr) list * expr
-  | StructExpr of (string * expr) list
+  | StructExpr of string * (string * expr) list
   | UndefExpr
   | RangeSelectExpr of expr * int * int
   | BitSelectExpr of expr * int
