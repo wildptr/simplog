@@ -65,7 +65,9 @@ rule token = parse
   | "and"               { AND }
   | "assign"            { ASSIGN }
   | "bits"              { BITS }
+  | "bool"              { BOOL }
   | "case"              { CASE }
+  | "default"           { DEFAULT }
   | "end"               { END }
   | "enum"              { ENUM }
   | "false"             { FALSE }
@@ -76,27 +78,41 @@ rule token = parse
   | "let"               { LET }
   | "module"            { MODULE }
   | "output"            { OUTPUT }
+  | "pack"              { PACK }
+  | "reg"               { REG }
+  | "signed"            { SIGNED }
   | "struct"            { STRUCT }
   | "true"              { TRUE }
   | "typedef"           { TYPEDEF }
   | "undef"             { UNDEF }
+  | "unpack"            { UNPACK }
+(*| "unsigned"          { UNSIGNED }*)
   | "val"               { VAL }
 
   | ident as s          { Ident s }
   | "&&"                { And }
+  | "||"                { Or }
   | "=="                { Equal }
   | "!="                { NotEqual }
-  | "||"                { Or }
+  | "<="                { LE }
+  | ">="                { GE }
+  | "<<"                { SHL }
+  | ">>"                { SHR }
+  | ">>>"               { ASHR }
+  | '!'                 { Bang }
   | '&'                 { Amp }
   | '('                 { LParen }
   | ')'                 { RParen }
+  | '*'                 { Star }
   | '+'                 { Plus }
   | ','                 { Comma }
   | '-'                 { Minus }
   | '.'                 { Dot }
   | ':'                 { Colon }
   | ';'                 { Semi }
+  | '<'                 { LT }
   | '='                 { Eq }
+  | '>'                 { GT }
   | '?'                 { Quest }
   | '['                 { LBrack }
   | ']'                 { RBrack }
@@ -104,6 +120,7 @@ rule token = parse
   | '{'                 { LBrace }
   | '|'                 { Bar }
   | '}'                 { RBrace }
+  | '~'                 { Tilde }
   | eof                 { EOF }
 
   | '"' ([^'"' '\n']* as s) '"' { String s }
