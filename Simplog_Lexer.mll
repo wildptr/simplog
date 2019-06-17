@@ -55,10 +55,10 @@ rule token = parse
   | '\n'                { next_line lexbuf; token lexbuf }
 
   (* numeric literals *)
-  | dec_base (dec_number as s) { DecLit (convert_dec_literal s) }
-  | bin_base (bin_number as s) { BinLit (convert_bin_literal s) }
-  | oct_base (oct_number as s) { OctLit (convert_oct_literal s) }
-  | hex_base (hex_number as s) { HexLit (convert_hex_literal s) }
+  | dec_base white? (dec_number as s) { DecLit (convert_dec_literal s) }
+  | bin_base white? (bin_number as s) { BinLit (convert_bin_literal s) }
+  | oct_base white? (oct_number as s) { OctLit (convert_oct_literal s) }
+  | hex_base white? (hex_number as s) { HexLit (convert_hex_literal s) }
   | dec_number as s { Int (int_of_string s) }
 
   (* keywords *)
@@ -75,11 +75,13 @@ rule token = parse
   | "import"            { IMPORT }
   | "in"                { IN }
   | "input"             { INPUT }
+  | "instance"          { INSTANCE }
   | "let"               { LET }
   | "module"            { MODULE }
   | "output"            { OUTPUT }
   | "pack"              { PACK }
   | "reg"               { REG }
+  | "sign_extend"       { SIGN_EXTEND }
   | "signed"            { SIGNED }
   | "struct"            { STRUCT }
   | "true"              { TRUE }
@@ -88,6 +90,8 @@ rule token = parse
   | "unpack"            { UNPACK }
 (*| "unsigned"          { UNSIGNED }*)
   | "val"               { VAL }
+  | "when"              { WHEN }
+  | "zero_extend"       { ZERO_EXTEND }
 
   | ident as s          { Ident s }
   | "&&"                { And }
@@ -99,6 +103,8 @@ rule token = parse
   | "<<"                { SHL }
   | ">>"                { SHR }
   | ">>>"               { ASHR }
+  | "->"                { Arrow }
+  | ":="                { MapsTo }
   | '!'                 { Bang }
   | '&'                 { Amp }
   | '('                 { LParen }

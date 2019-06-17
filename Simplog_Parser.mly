@@ -1,6 +1,6 @@
 %{
-module S = Simplog_AST
-open S
+module Syn = Simplog_AST
+open Syn
 %}
 
 %token EOF
@@ -27,11 +27,13 @@ open S
 %token IMPORT
 %token IN
 %token INPUT
+%token INSTANCE
 %token LET
 %token MODULE
 %token OUTPUT
 %token PACK
 %token REG
+%token SIGN_EXTEND
 %token SIGNED
 %token STRUCT
 %token TRUE
@@ -39,6 +41,8 @@ open S
 %token UNDEF
 %token UNPACK
 %token VAL
+%token WHEN
+%token ZERO_EXTEND
 
 %token And
 %token Or
@@ -49,6 +53,8 @@ open S
 %token SHL
 %token SHR
 %token ASHR
+%token Arrow
+%token MapsTo
 
 %token Bang
 %token Amp
@@ -125,10 +131,14 @@ atom_type:
   | LParen type_ RParen { $2 }
   | BOOL { BoolType }
 
-type_:
+type1:
   | atom_type { $1 }
   | hd = atom_type; Star; tl = separated_nonempty_list(Star, atom_type)
     { TupleType (hd::tl) }
+
+type_:
+  | type1 { $1 }
+  | type1 Arrow type_ { MapType ($1, $3) }
 
 struct_field: type_ Ident Semi { $1, $2 }
 
@@ -173,6 +183,10 @@ atom_expr:
                 {{ e_loc = $loc; e_type = None; e_kind = ApplyExpr (func_name, args) }}
 (*| PACK LParen e=expr RParen
                 {{ e_loc = $loc; e_type = None; e_kind = PackExpr e }}*)
+  | ZERO_EXTEND LParen len=Int Comma e=expr RParen
+                {{ e_loc = $loc; e_type = None; e_kind = ExtendExpr (false, len, e) }}
+  | SIGN_EXTEND LParen len=Int Comma e=expr RParen
+                {{ e_loc = $loc; e_type = None; e_kind = ExtendExpr (true, len, e) }}
 
 replicate_e:
   LBrace n=Int LBrace e=expr RBrace RBrace { ReplicateExpr (n, e) }
@@ -184,7 +198,11 @@ case_e:
   CASE; LParen; e = expr; RParen; branches = list(case_branch); END
     { CaseExpr (e, branches) }
 
-case_branch: separated_nonempty_list(Comma, expr) Colon expr Semi { $1, $3 }
+case_branch: case_label Colon expr Semi { $1, $3 }
+
+case_label:
+  | separated_nonempty_list(Comma, expr) { Some $1 }
+  | DEFAULT { None }
 
 prefix_expr:
   | postfix_expr { $1 }
@@ -198,13 +216,13 @@ bin_expr:
   | bin_expr Amp      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (LogAnd, $1, $3) }}
   | bin_expr Caret    bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (LogXor, $1, $3) }}
   | bin_expr Bar      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (LogOr,  $1, $3) }}
-  | bin_expr And      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (S.And,  $1, $3) }}
-  | bin_expr Or       bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (S.Or,   $1, $3) }}
-  | bin_expr SHL      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (S.SHL,  $1, $3) }}
-  | bin_expr SHR      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (S.LSHR, $1, $3) }}
-  | bin_expr ASHR     bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (S.ASHR, $1, $3) }}
+  | bin_expr And      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (Syn.And,  $1, $3) }}
+  | bin_expr Or       bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (Syn.Or,   $1, $3) }}
+  | bin_expr SHL      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (Syn.SHL,  $1, $3) }}
+  | bin_expr SHR      bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (Syn.LSHR, $1, $3) }}
+  | bin_expr ASHR     bin_expr  {{ e_loc = $loc; e_type = None; e_kind = BinExpr (Syn.ASHR, $1, $3) }}
 
-  | bin_expr Equal       bin_expr       {{ e_loc = $loc; e_type = None; e_kind = BinExpr (S.Eq,   $1, $3) }}
+  | bin_expr Equal       bin_expr       {{ e_loc = $loc; e_type = None; e_kind = BinExpr (Syn.Eq,   $1, $3) }}
   | bin_expr NotEqual    bin_expr       {{ e_loc = $loc; e_type = None; e_kind = BinExpr (NotEq,  $1, $3) }}
   | bin_expr SIGNED   LT bin_expr       {{ e_loc = $loc; e_type = None; e_kind = BinExpr (SLT,    $1, $4) }}
   | bin_expr          LT bin_expr       {{ e_loc = $loc; e_type = None; e_kind = BinExpr (ULT,    $1, $3) }}
@@ -223,6 +241,10 @@ postfix_expr:
     {{ e_loc = $loc; e_type = None; e_kind = BitSelectExpr (e, i, $loc(i)) }}
   | e=postfix_expr Dot name=Ident
     {{ e_loc = $loc; e_type = None; e_kind = FieldSelectExpr (e, name, $loc(name)) }}
+  | e1=postfix_expr LBrack e2=expr RBrack
+    {{ e_loc = $loc; e_type = None; e_kind = IndexExpr (e1, e2) }}
+  | e1=postfix_expr LBrack e2=expr MapsTo e3=expr RBrack
+    {{ e_loc = $loc; e_type = None; e_kind = UpdateExpr (e1, e2, e3) }}
 
 let_expr:
   | cond_expr { $1 }
@@ -257,23 +279,38 @@ port:
 
 module_decl:
   MODULE; name = Ident; ports = loption(delimited(LParen, separated_nonempty_list(Comma, port), RParen));
-  items = list(module_item); END; Semi
-    { ModuleDecl { name; ports; items } }
+  decls = list(module_comp_decl); items = list(module_item); END; Semi
+    { ModuleDecl { name; ports; decls; items } }
+
+module_comp_decl:
+  | val_decl    { $1 }
+  | reg_decl    { $1 }
+  | inst_decl   { $1 }
 
 module_item:
-  | decl                { DeclItem $1 }
-  | val_mod_item        { $1 }
   | inst_mod_item       { $1 }
   | assign_mod_item     { $1 }
+  | reg_assign_mod_item { $1 }
 
-val_mod_item:
+val_decl:
   VAL type_ separated_nonempty_list(Comma, Ident) Semi
-    { ValItem ($2, $3) }
+    { ValDecl ($2, $3) }
+
+reg_decl:
+  REG type_ separated_nonempty_list(Comma, Ident) Semi
+    { RegDecl ($2, $3) }
+
+inst_decl:
+  INSTANCE mod_name = Ident; inst_names = separated_nonempty_list(Comma, Ident); Semi
+    { InstDecl (mod_name, inst_names) }
 
 inst_mod_item:
-  mod_name = Ident; type_params = loption(delimited(LParen, separated_nonempty_list(Comma, type_), RParen))
   inst_name = Ident; LParen; ports = separated_nonempty_list(Comma, field); RParen; Semi
-    { InstItem { mod_name; type_params; inst_name; ports } }
+    { InstItem (inst_name, ports, $loc) }
 
 assign_mod_item:
   ASSIGN Ident Eq expr Semi { AssignItem ($2, $4) }
+
+reg_assign_mod_item:
+  name = Ident; LE; value = expr; guard = option(preceded(WHEN, expr)); Semi
+    { RegAssignItem (name, value, guard) }

@@ -1,15 +1,9 @@
 open ExtLib
+open Util
 
-module String' = struct
-  type t = string
-  let equal = String.equal
-  let compare = String.compare
-  let hash = Hashtbl.hash
-end
-
-module M = Map.Make(String)
-module H = Hashtbl.Make(String')
-module G = Graph.Imperative.Graph.Concrete(String')
+module M = Map.Make(String_Key)
+module H = Hashtbl.Make(String_Key)
+module G = Graph.Imperative.Digraph.Concrete(String_Key)
 
 exception Syntax_Error
 
@@ -38,7 +32,7 @@ let find_module mod_name =
   mod_name ^ ".sl"
 
 let rec read_module dep_graph cache mod_name mod_fpath =
-  Printf.eprintf "reading module %s\n" mod_name;
+  (*Printf.eprintf "reading module %s\n" mod_name;*)
   let imports, decls = parse_file mod_fpath in
   H.add cache mod_name decls;
   G.add_vertex dep_graph mod_name;
@@ -57,13 +51,12 @@ let rec read_module dep_graph cache mod_name mod_fpath =
   end
 
 let read_toplevel mod_name fpath =
-  let module G = Graph.Imperative.Graph.Concrete(String') in
   let cache = H.create 1 in
   let dep_graph = G.create () in
   read_module dep_graph cache mod_name fpath;
   let module Topo = Graph.Topological.Make(G) in
   let decls = ref [] in
-  Topo.iter (fun m -> Printf.eprintf "%s\n" m; decls := H.find cache m :: !decls) dep_graph;
+  Topo.iter (fun m -> (*Printf.eprintf "%s\n" m;*) decls := H.find cache m :: !decls) dep_graph;
   !decls |> List.rev |> List.concat
 
 let () =
@@ -72,5 +65,7 @@ let () =
   let decls =
     try read_toplevel top_module_name fpath with Syntax_Error -> exit 1
   in
-  let typed_decls = Typing.type_decls decls in
-  Translate_Isa.output_theory top_module_name typed_decls
+  let env, typed_decls =
+    try Typing.type_decls decls with Typing.Error -> exit 1
+  in
+  Translate_Isa.output_theory top_module_name env typed_decls
