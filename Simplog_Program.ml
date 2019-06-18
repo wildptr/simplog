@@ -11,6 +11,7 @@ type type_ =
   | StructType of string * (type_ * string) array
   | TupleType of type_ list
   | MapType of type_ * type_
+  | AbsType of string
 
 let rec pp_type f typ =
   let open Format in
@@ -23,9 +24,11 @@ let rec pp_type f typ =
   | StructType (name, _) ->
     pp_print_string f name
   | TupleType types ->
-    fprintf f "(%a)" (pp_sep_list " * " pp_type) types
+    fprintf f "(%a)" (pp_comma_sep_list pp_type) types
   | MapType (t1, t2) ->
-    fprintf f "(%a -> %a)" pp_type t1 pp_type t2
+    fprintf f "%a[%a]" pp_type t1 pp_type t2
+  | AbsType name ->
+    pp_print_string f name
 
 let show_type typ =
   Format.asprintf "%a" pp_type typ

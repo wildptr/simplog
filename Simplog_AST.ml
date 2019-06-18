@@ -73,8 +73,8 @@ type module_comp_decl =
 
 type module_item =
   | InstItem of string * field list (* inst_name, ports *) * loc
-  | AssignItem of string * expr
-  | RegAssignItem of string * expr * expr option (* r <= e [when g] *)
+  | AssignItem of string * loc * expr
+  | RegAssignItem of string * loc * expr * expr option (* r <= e [when g] *)
 
 type module_decl = {
   name : string;
@@ -99,7 +99,7 @@ type inst_info = {
   input_map : expr M.t;
   (* an output port may be unconnected, thus "option" *)
   output_map : string option M.t;
-  used_inputs_out : expr list;
+  used_inputs_out : expr list M.t;
   used_inputs_upd : expr list;
   defined_names : string list
 }
@@ -116,9 +116,9 @@ and module_info = {
   regs : (P.type_ * string) list;
   insts : (module_info * string) list;
   items : typed_module_item list;
-  inputs_used_by_out : (P.type_ * string) list;
+  inputs_used_by_out : (P.type_ * string) list M.t;
   inputs_used_by_upd : (P.type_ * string) list;
-  used_names_out : S.t;
+  used_names_out : S.t M.t;
   used_names_upd : S.t;
   val_dep_graph : G.t;
   inst_map : module_info M.t

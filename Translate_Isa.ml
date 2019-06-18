@@ -17,6 +17,7 @@ let rec pp_type f = function
   | P.TupleType types -> pp_tuple_type f types
   | P.MapType (t1, t2) ->
     fprintf f "(%a \\<Rightarrow> %a)" pp_type t1 pp_type t2
+  | P.AbsType name -> pp_print_string f name
 
 and pp_tuple_type f types =
   if types = [] then
@@ -213,18 +214,6 @@ let pp_decl (env : Typing.env) f = function
         mod_name inst_name (inst_mod_info.module_name ^ "_state")
     end;
 
-    fprintf f "definition %s_out :: \\<open>" mod_name;
-    mod_info.inputs_used_by_out |> List.iter begin fun (typ, name) ->
-      fprintf f "%a \\<Rightarrow> " pp_type typ
-    end;
-    fprintf f "%s \\<Rightarrow> %a\\<close> where\n  \\<open>%s_out"
-      state_type_name pp_tuple_type (List.map fst mod_info.outputs) mod_name;
-    mod_info.inputs_used_by_out |> List.iter (fun (typ, name) -> fprintf f " %s" name);
-    pp_print_string f " \\<S> \\<equiv> ";
-
-    let module G = Graph.Imperative.Digraph.Concrete(String_Key) in
-    let module Topo = Graph.Topological.Make(G) in
-
     (* populate definition table *)
     let def_table = H.create 0 in
     mod_info.items |> List.iter begin function
@@ -244,23 +233,22 @@ let pp_decl (env : Typing.env) f = function
         H.add def_table (reg_name^"'") def_text
       | T_InstItem inst ->
         let inst_mod_info = inst.mod_info in
-        (* string -> int *)
+        (* defined name -> output port name *)
         let defined_name_map =
-          let output_index_map, _ =
+        (*let output_index_map, _ =
             List.fold_left (fun (m, i) (_, name) -> M.add name i m, i+1)
               (M.empty, 0) inst_mod_info.outputs
-          in
-          M.fold begin fun port_name defined_name_opt m ->
+          in*)
+          M.fold begin fun out_port_name defined_name_opt m ->
             match defined_name_opt with
             | None -> m
             | Some defined_name ->
-              let output_index = M.find port_name output_index_map in
-              M.add defined_name output_index m
+              M.add defined_name out_port_name m
           end inst.output_map M.empty
-        and n_output =
-          List.length inst_mod_info.outputs
+      (*and n_output =
+          List.length inst_mod_info.outputs*)
         in
-        let tuple_def_text =
+      (*let tuple_def_text =
           let f = Format.str_formatter in
           fprintf f "%s_out" inst_mod_info.module_name;
           List.iter (fprintf f " %a" pp_expr) inst.used_inputs_out;
@@ -273,16 +261,23 @@ let pp_decl (env : Typing.env) f = function
           else if n > 1 then
             Printf.sprintf "fst (%s)" acc
           else acc
-        in
+        in*)
         (* instance outputs *)
         M.iter begin fun defined_name index ->
-          H.add def_table defined_name (select tuple_def_text index n_output)
+          let def_text =
+            let f = Format.str_formatter in
+            let out_port_name = M.find defined_name defined_name_map in
+            fprintf f "%s_out_%s" inst_mod_info.module_name out_port_name;
+            List.iter (fprintf f " %a" pp_expr)
+              (M.find out_port_name inst.used_inputs_out);
+            Format.flush_str_formatter ()
+          in
+          H.add def_table defined_name def_text
         end defined_name_map;
         let def_text =
           let f = Format.str_formatter in
           fprintf f "%s_upd" inst_mod_info.module_name;
           List.iter (fprintf f " %a" pp_expr) inst.used_inputs_upd;
-          fprintf f " %s" inst.name;
           Format.flush_str_formatter ()
         in
         (* instance state *)
@@ -290,26 +285,42 @@ let pp_decl (env : Typing.env) f = function
         H.add def_table (inst.name^"'") def_text
     end;
 
-    Topo.iter begin fun name ->
-      if S.mem name mod_info.used_names_out then begin
-        (*Printf.eprintf "%s\n" name;*)
-        match H.find_opt def_table name with
-        | None -> () (* input or symbolic constant *)
-        | Some def -> fprintf f "let %s = %s in " name def
-      end
-    end mod_info.val_dep_graph;
-    fprintf f "(%a)"
-      (pp_comma_sep_list pp_print_string) (List.map snd mod_info.outputs);
-    pp_print_string f "\\<close>\n";
-    (* the update function *)
+    let module G = Graph.Imperative.Digraph.Concrete(String_Key) in
+    let module Topo = Graph.Topological.Make(G) in
+
+    (* generate a function for each output port *)
+    mod_info.outputs |> List.iter begin fun (out_port_type, out_port_name) ->
+      fprintf f "definition %s_out_%s :: \\<open>" mod_name out_port_name;
+      let inputs_used = M.find out_port_name mod_info.inputs_used_by_out in
+      inputs_used |> List.iter begin fun (typ, _) ->
+        fprintf f "%a \\<Rightarrow> " pp_type typ
+      end;
+      fprintf f "%a\\<close> where\n  \\<open>%s_out_%s"
+        pp_type out_port_type mod_name out_port_name;
+      inputs_used |> List.iter (fun (typ, name) -> fprintf f " %s" name);
+      pp_print_string f " \\<equiv> ";
+
+      let used_names = M.find out_port_name mod_info.used_names_out in
+      Topo.iter begin fun name ->
+        if S.mem name used_names then begin
+          match H.find_opt def_table name with
+          | None -> () (* input or symbolic constant *)
+          | Some def -> fprintf f "let %s = %s in " name def
+        end
+      end mod_info.val_dep_graph;
+      
+      fprintf f "%s\\<close>\n" out_port_name
+    end;
+
+    (* generate the update function *)
     fprintf f "definition %s_upd :: \\<open>" mod_name;
     mod_info.inputs_used_by_upd |> List.iter begin fun (typ, name) ->
       fprintf f "%a \\<Rightarrow> " pp_type typ
     end;
-    fprintf f "%s \\<Rightarrow> %s\\<close> where\n  \\<open>%s_upd"
-      state_type_name state_type_name mod_name;
+    fprintf f "%s\\<close> where\n  \\<open>%s_upd"
+      state_type_name mod_name;
     mod_info.inputs_used_by_upd |> List.iter (fun (typ, name) -> fprintf f " %s" name);
-    pp_print_string f " \\<S> \\<equiv> ";
+    pp_print_string f " \\<equiv> ";
     Topo.iter begin fun name ->
       if S.mem name mod_info.used_names_upd then begin
         match H.find_opt def_table name with
@@ -328,10 +339,10 @@ let pp_decl (env : Typing.env) f = function
       name (pp_sep_list "\n  " (pp_record_field name)) fields
 
 let output_theory module_name env decls =
-  let thy_path = module_name ^ "_Spec.thy" in
+  let thy_path = module_name ^ "_Model.thy" in
   let oc = open_out thy_path in
   let f = formatter_of_out_channel oc in
-  fprintf f "theory %s_Spec imports \"~~/src/HOL/Word/Word\" begin\n" module_name;
+  fprintf f "theory %s_Model imports \"~~/src/HOL/Word/Word\" begin\n" module_name;
   List.iter (pp_decl env f) decls;
   pp_print_string f "end\n";
   close_out oc

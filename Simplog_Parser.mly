@@ -117,7 +117,7 @@ import:
 
 typedef: TYPEDEF type_ Ident Semi { Typedef ($2, $3) }
 
-atom_type:
+type_:
 (*| Ident; loption(delimited(LParen, separated_nonempty_list(Comma, type_), RParen))
     { TypeIdent ($1, $2) }*)
   | Ident
@@ -129,16 +129,10 @@ atom_type:
   | STRUCT; LBrace; l = list(struct_field); RBrace
     { StructType l }*)
   | LParen type_ RParen { $2 }
-  | BOOL { BoolType }
-
-type1:
-  | atom_type { $1 }
-  | hd = atom_type; Star; tl = separated_nonempty_list(Star, atom_type)
+  | LParen; hd = type_; Comma; tl = separated_nonempty_list(Comma, type_); RParen
     { TupleType (hd::tl) }
-
-type_:
-  | type1 { $1 }
-  | type1 Arrow type_ { MapType ($1, $3) }
+  | BOOL { BoolType }
+  | t1 = type_; LBrack; t2 = type_; RBrack { MapType (t1, t2) }
 
 struct_field: type_ Ident Semi { $1, $2 }
 
@@ -309,8 +303,8 @@ inst_mod_item:
     { InstItem (inst_name, ports, $loc) }
 
 assign_mod_item:
-  ASSIGN Ident Eq expr Semi { AssignItem ($2, $4) }
+  Ident Eq expr Semi { AssignItem ($1, $loc($1), $3) }
 
 reg_assign_mod_item:
   name = Ident; LE; value = expr; guard = option(preceded(WHEN, expr)); Semi
-    { RegAssignItem (name, value, guard) }
+    { RegAssignItem (name, $loc(name), value, guard) }

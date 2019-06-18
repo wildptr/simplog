@@ -432,8 +432,8 @@ let type_module_item env = function
     in
     (* TODO: ... *)
     let input_map =
-      List.fold_left begin fun m (exp_type, port_name) ->
-        match M.find port_name port_map with
+      List.fold_left begin fun m (exp_type, in_port_name) ->
+        match M.find in_port_name port_map with
         | e ->
           begin match e.e_type with
             | None -> ()
@@ -445,16 +445,16 @@ let type_module_item env = function
                 env.error := true
               end
           end;
-          M.add port_name e m
+          M.add in_port_name e m
         | exception Not_found ->
-          error inst_loc (sprintf "input port ‘%s’ is not connected" port_name);
+          error inst_loc (sprintf "input port ‘%s’ is not connected" in_port_name);
           env.error := true;
           m
       end M.empty mod_info.inputs
     and output_map =
-      List.fold_left begin fun m (exp_type, port_name) ->
+      List.fold_left begin fun m (exp_type, out_port_name) ->
         let defined_name_opt =
-          match M.find_opt port_name port_map with
+          match M.find_opt out_port_name port_map with
           | None -> None
           | Some e ->
             begin match e.e_type with
@@ -476,18 +476,26 @@ let type_module_item env = function
                 None
             end
         in
-        M.add port_name defined_name_opt m
+        M.add out_port_name defined_name_opt m
       end M.empty mod_info.outputs
     in
+    (* input map augmented with the state argument *)
+    let input_map' =
+      M.add "\\<S>"
+        { e_kind = IdentExpr inst_name;
+          e_type = Some (P.AbsType (mod_info.module_name ^ "_state"));
+          e_loc = Lexing.dummy_pos, Lexing.dummy_pos }
+        input_map
+    in
     let used_inputs_out =
-      mod_info.inputs_used_by_out |>
-      List.filter_map (fun (_, name) -> M.find_opt name input_map)
+      M.map (List.filter_map (fun (_, name) -> M.find_opt name input_map'))
+        mod_info.inputs_used_by_out
     and used_inputs_upd =
       mod_info.inputs_used_by_upd |>
-      List.filter_map (fun (_, name) -> M.find_opt name input_map)
+      List.filter_map (fun (_, name) -> M.find_opt name input_map')
     in
     let defined_names =
-      M.fold begin fun port_name defined_name_opt acc ->
+      M.fold begin fun _ defined_name_opt acc ->
         match defined_name_opt with
         | None -> acc
         | Some defined_name -> defined_name :: acc
@@ -496,12 +504,49 @@ let type_module_item env = function
     T_InstItem
       { name = inst_name; mod_info; input_map; output_map;
         used_inputs_out; used_inputs_upd; defined_names }
-  | AssignItem (name, value) ->
+  | AssignItem (name, name_loc, value) ->
     type_expr env value;
+    begin match M.find name env.value_map with
+      | exp_type ->
+        if type_mismatch exp_type value.e_type then begin
+          error value.e_loc
+            (sprintf "expected type %s, got %s"
+               (show_type (the exp_type)) (show_type (the value.e_type)));
+          env.error := true
+        end
+      | exception Not_found ->
+        error name_loc (sprintf "undeclared identifier ‘%s’" name);
+        env.error := true
+    end;
     T_AssignItem (name, value)
-  | RegAssignItem (name, value, guard) ->
+  | RegAssignItem (name, name_loc, value, guard) ->
     type_expr env value;
-    Option.may (type_expr env) guard;
+    (* TODO: code dup *)
+    begin match M.find name env.value_map with
+      | exp_type ->
+        if type_mismatch exp_type value.e_type then begin
+          error value.e_loc
+            (sprintf "expected type %s, got %s"
+               (show_type (the exp_type)) (show_type (the value.e_type)));
+          env.error := true
+        end
+      | exception Not_found ->
+        error name_loc (sprintf "undeclared identifier ‘%s’" name);
+        env.error := true
+    end;
+    begin match guard with
+      | None -> ()
+      | Some guard ->
+        type_expr env guard;
+        begin match guard.e_type with
+          | None -> ()
+          | Some BoolType -> ()
+          | Some t ->
+            error guard.e_loc
+              (sprintf "bool type expected, got %s" (show_type t));
+            env.error := true
+        end
+    end;
     T_RegAssignItem (name, value, guard)
 
 let type_module_decl env (md : module_decl) : module_info =
@@ -572,8 +617,13 @@ let type_module_decl env (md : module_decl) : module_info =
 
   let module G = Graph.Imperative.Digraph.Concrete(String_Key) in
 
+  (* build value dependency graph *)
   let val_dep_graph = G.create () in
-
+  (* the value of a register depends on the state of the module *)
+  regs |> List.iter (fun (_, name) -> G.add_edge val_dep_graph "\\<S>" name);
+  (* so does the state of an instance *)
+  insts |> List.iter (fun (_, name) -> G.add_edge val_dep_graph "\\<S>" name);
+  (**)
   typed_items |> List.iter begin function
     | T_AssignItem (name, value) ->
       G.add_vertex val_dep_graph name;
@@ -595,39 +645,46 @@ let type_module_decl env (md : module_decl) : module_info =
         | _ -> ()
       in
       visit_expr visit value;
-      Option.may (visit_expr visit) guard
+      begin match guard with
+        | None -> ()
+        | Some g ->
+          visit_expr visit g;
+          G.add_edge val_dep_graph name next_name
+      end
     | T_InstItem inst ->
-      let visit e =
+      let visit defined_name e =
         match e.e_kind with
         | IdentExpr used_name ->
-          List.iter (G.add_edge val_dep_graph used_name) inst.defined_names
+          G.add_edge val_dep_graph used_name defined_name
         | _ -> ()
       in
-      List.iter (visit_expr visit) inst.used_inputs_out;
-      List.iter (G.add_edge val_dep_graph inst.name) inst.defined_names;
+      inst.used_inputs_out |> M.iter begin fun output_port_name es ->
+        match M.find output_port_name inst.output_map with
+        | None -> ()
+        | Some defined_name -> List.iter (visit_expr (visit defined_name)) es
+      end;
       let next_state_name = inst.name ^ "'" in
-      let visit e =
-        match e.e_kind with
-        | IdentExpr used_name ->
-          G.add_edge val_dep_graph used_name next_state_name
-        | _ -> ()
-      in
-      List.iter (visit_expr visit) inst.used_inputs_upd;
-      G.add_edge val_dep_graph inst.name next_state_name
+      List.iter (visit_expr (visit next_state_name)) inst.used_inputs_upd
   end;
+  (* done building value dependency graph *)
 
   let reg_names = List.map snd regs
   and inst_names = List.map snd insts in
   let used_names_out =
-    let tmp = ref S.empty in
-    let rec visit node =
-      if not (S.mem node !tmp) then begin
-        tmp := S.add node !tmp;
-        G.iter_pred visit val_dep_graph node
-      end
-    in
-    outputs |> List.iter (fun (_, name) -> visit name);
-    !tmp
+    List.fold_left begin fun m (_, out_port_name) ->
+      let used_names =
+        let tmp = ref S.empty in
+        let rec visit node =
+          if not (S.mem node !tmp) then begin
+            tmp := S.add node !tmp;
+            G.iter_pred visit val_dep_graph node
+          end
+        in
+        visit out_port_name;
+        !tmp
+      in
+      M.add out_port_name used_names m
+    end M.empty outputs;
   and used_names_upd =
     let tmp = ref S.empty in
     let rec visit node =
@@ -641,10 +698,20 @@ let type_module_decl env (md : module_decl) : module_info =
     !tmp
   in
 
+  let inst_state_type = P.AbsType (md.name ^ "_state") in
+
   let inputs_used_by_out =
-    inputs |> List.filter (fun (_, name) -> S.mem name used_names_out)
+    List.fold_left begin fun m (_, out_port_name) ->
+      let used_names = M.find out_port_name used_names_out in
+      let used_inputs =
+        inputs @ [inst_state_type, "\\<S>"] |>
+        List.filter (fun (_, name) -> S.mem name used_names)
+      in
+      M.add out_port_name used_inputs m
+    end M.empty outputs
   and inputs_used_by_upd =
-    inputs |> List.filter (fun (_, name) -> S.mem name used_names_upd)
+    inputs @ [inst_state_type, "\\<S>"] |>
+    List.filter (fun (_, name) -> S.mem name used_names_upd)
   in
 
   (*Format.eprintf "module %s\n  inputs used by out: %a\n  inputs used by upd: %a@." md.name
@@ -652,10 +719,10 @@ let type_module_decl env (md : module_decl) : module_info =
     (pp_comma_sep_list Format.pp_print_string) (List.map snd inputs_used_by_upd);*)
 
   (*{ name = md.name; ports; state_elements; items = List.rev typed_items },*)
-  { module_name = md.name; inputs_used_by_out; inputs_used_by_upd;
-    used_names_out; used_names_upd;
+  { module_name = md.name;
     regs = List.map (fun (typ, name) -> the typ, name) regs; insts;
     inputs; outputs; items = typed_items;
+    inputs_used_by_out; inputs_used_by_upd; used_names_out; used_names_upd;
     val_dep_graph; inst_map }
 
 let extend_env_decl env = function
